@@ -5,7 +5,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
-
+from __future__ import annotations
 
 _LOCKS: dict[str, threading.RLock] = {}
 
