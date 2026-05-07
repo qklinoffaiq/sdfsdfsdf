@@ -4,8 +4,8 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any
-from __future__ import annotations
+from typing import Any, Union
+
 
 _LOCKS: dict[str, threading.RLock] = {}
 
@@ -17,7 +17,7 @@ def _get_lock(path: Path) -> threading.RLock:
     return _LOCKS[key]
 
 
-def read_json(path: str | Path, default: Any) -> Any:
+def read_json(path: Union[str, Path], default: Any) -> Any:
     file_path = Path(path)
     lock = _get_lock(file_path)
     with lock:
@@ -30,7 +30,7 @@ def read_json(path: str | Path, default: Any) -> Any:
             return _clone_default(default)
 
 
-def write_json_atomic(path: str | Path, data: Any) -> None:
+def write_json_atomic(path: Union[str, Path], data: Any) -> None:
     file_path = Path(path)
     lock = _get_lock(file_path)
     with lock:
@@ -56,7 +56,7 @@ def write_json_atomic(path: str | Path, data: Any) -> None:
                 os.remove(temp_path)
 
 
-def ensure_json_file(path: str | Path, default: Any) -> Any:
+def ensure_json_file(path: Union[str, Path], default: Any) -> Any:
     file_path = Path(path)
     if not file_path.exists():
         write_json_atomic(file_path, _clone_default(default))
