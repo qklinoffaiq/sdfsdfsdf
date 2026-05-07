@@ -1,0 +1,8 @@
+vk-api==11.9.9
+requests
+json
+threading
+time
+datetime
+os
+python-dotenv

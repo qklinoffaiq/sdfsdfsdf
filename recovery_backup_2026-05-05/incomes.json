@@ -1,0 +1,32 @@
+[
+    {
+        "user_id": 574393629,
+        "amount": 2000,
+        "description": "main_text - месяц",
+        "created_at": "2026-05-01 22:32:41"
+    },
+    {
+        "user_id": 574393629,
+        "amount": 450,
+        "description": "new_ad - месяц",
+        "created_at": "2026-05-01 22:40:40"
+    },
+    {
+        "user_id": 574393629,
+        "amount": 0,
+        "description": "update_ad - месяц",
+        "created_at": "2026-05-02 07:58:26"
+    },
+    {
+        "user_id": 574393629,
+        "amount": 450,
+        "description": "new_ad - месяц",
+        "created_at": "2026-05-02 09:29:31"
+    },
+    {
+        "user_id": 574393629,
+        "amount": 450,
+        "description": "new_ad - месяц",
+        "created_at": "2026-05-02 13:19:03"
+    }
+]

@@ -1,0 +1,71 @@
+{
+    "574393629": {
+        "role": "dev",
+        "osn_photo_count": 5,
+        "osn_text_count": 2,
+        "total_messages": 169,
+        "last_message": "2026-05-02 13:24:54 | command",
+        "stats": {
+            "command": 68,
+            "last_activity": "2026-05-02 13:24:54",
+            "osn_photo": 2,
+            "osn_text": 1
+        }
+    },
+    "488828183": {
+        "role": "admin",
+        "osn_photo_count": 0,
+        "osn_text_count": 0,
+        "total_messages": 0,
+        "last_message": "2026-04-26 17:08:52 | message"
+    },
+    "672052315": {
+        "role": "user",
+        "osn_photo_count": 0,
+        "osn_text_count": 0,
+        "total_messages": 0,
+        "last_message": "2026-04-19 10:37:16 | message"
+    },
+    "-232598001": {
+        "role": "user",
+        "osn_photo_count": 0,
+        "osn_text_count": 0,
+        "total_messages": 0,
+        "last_message": "2026-04-19 09:41:49 | message"
+    },
+    "597064735": {
+        "role": "admin",
+        "osn_photo_count": 0,
+        "osn_text_count": 0,
+        "total_messages": 0,
+        "last_message": ""
+    },
+    "870478120": {
+        "role": "admin",
+        "osn_photo_count": 0,
+        "osn_text_count": 0,
+        "total_messages": 0,
+        "last_message": "2026-04-19 10:36:49 | message"
+    },
+    "738733496": {
+        "role": "user",
+        "osn_photo_count": 0,
+        "osn_text_count": 0,
+        "total_messages": 0,
+        "last_message": "2026-04-19 10:34:14 | message"
+    },
+    "888274461": {
+        "role": "user",
+        "osn_photo_count": 0,
+        "osn_text_count": 0,
+        "total_messages": 0,
+        "last_message": "2026-04-19 13:12:52 | message"
+    },
+    "1039110251": {
+        "role": "user",
+        "osn_photo_count": 0,
+        "osn_text_count": 0,
+        "total_messages": 0,
+        "last_message": "2026-04-19 13:13:14 | message"
+    }
+}

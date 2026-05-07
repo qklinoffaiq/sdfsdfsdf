@@ -1,0 +1,133 @@
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from vk_api.keyboard import VkKeyboard, VkKeyboardColor
+
+
+def parse_message_payload(message: dict[str, Any], logger=None) -> dict[str, Any]:
+    payload = message.get("payload")
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, str) and payload.strip():
+        try:
+            return json.loads(payload)
+        except json.JSONDecodeError:
+            if logger:
+                logger.warning(f"Не удалось разобрать payload: {payload}")
+    return {}
+
+
+def render_broadcast_status(total_chats: int, sent_count: int, *, status_text: str) -> str:
+    percent = int((sent_count / total_chats) * 100) if total_chats else 0
+    return (
+        "ТЕКУЩАЯ РАССЫЛКА\n\n"
+        f"Всего чатов: {total_chats}\n"
+        f"Отправлено: {sent_count} / {total_chats} ({percent}%)\n"
+        f"Статус: {status_text}"
+    )
+
+
+def build_orders_list_keyboard(orders_data: dict[str, Any]) -> str:
+    keyboard = VkKeyboard(inline=True)
+    pending_ids = [order_id for order_id, order in orders_data.items() if order.get("status") == "pending"]
+    max_buttons = min(len(pending_ids), 20)
+    for index, order_id in enumerate(pending_ids[:max_buttons], start=1):
+        order_type = (orders_data.get(order_id, {}).get("type") or "").lower()
+        order_no = orders_data.get(order_id, {}).get("order_no", index)
+        if order_type in {"extend_ad", "renew_ad"}:
+            prefix = "Продление"
+        elif order_type == "update_ad":
+            prefix = "Изменение"
+        else:
+            prefix = "Новая"
+        keyboard.add_button(
+            f"{prefix} №{order_no}",
+            color=VkKeyboardColor.PRIMARY,
+            payload={"command": "view_order", "order_id": order_id},
+        )
+        if index % 2 == 0 and index < max_buttons:
+            keyboard.add_line()
+    return keyboard.get_keyboard()
+
+
+def build_order_action_keyboard(order_id: str, status: str | None = None) -> str:
+    keyboard = VkKeyboard(inline=True)
+    if status not in {"approved", "rejected"}:
+        keyboard.add_button("✅ Одобрить", color=VkKeyboardColor.POSITIVE, payload={"command": "approve_order", "order_id": order_id})
+        keyboard.add_button("❌ Отклонить", color=VkKeyboardColor.NEGATIVE, payload={"command": "reject_order", "order_id": order_id})
+        keyboard.add_line()
+        keyboard.add_button("📎 Показать чек", color=VkKeyboardColor.SECONDARY, payload={"command": "show_check", "order_id": order_id})
+    return keyboard.get_keyboard()
+
+
+def render_orders_list_text(orders_data: dict[str, Any]) -> str:
+    pending_count = sum(1 for order in orders_data.values() if order.get("status") == "pending")
+    if pending_count == 0:
+        return "ЗАЯВКИ НА МОДЕРАЦИЮ\n\nСтатус: пусто\nОжидающих проверку заявок нет."
+    return (
+        "ЗАЯВКИ НА МОДЕРАЦИЮ\n\n"
+        f"Ожидает проверки: {pending_count}\n"
+        "Выберите заявку из списка ниже."
+    )
+
+
+def render_order_details(order_id: str, order_data: dict[str, Any] | None, user_label: str) -> str:
+    if not order_data:
+        return "❌ Заявка не найдена."
+    status_map = {
+        "pending": "ожидает проверки",
+        "approved": "одобрена",
+        "rejected": "отклонена",
+    }
+    order_type_map = {
+        "new_ad": "новая реклама",
+        "update_ad": "изменение рекламы",
+        "extend_ad": "продление рекламы",
+        "renew_ad": "продление рекламы",
+    }
+    return (
+        "ЗАЯВКА НА РАССЫЛКУ\n\n"
+        f"№: {order_data.get('order_no', '-')}\n"
+        f"ID: {order_id}\n"
+        f"Тип: {order_type_map.get(order_data.get('type'), order_data.get('type', 'неизвестно'))}\n"
+        f"Пользователь: {user_label}\n"
+        f"Сумма: {order_data.get('price', 0)} ₽\n"
+        f"Срок: {order_data.get('days', 0)} дн.\n"
+        f"Статус: {status_map.get(order_data.get('status'), 'неизвестно')}\n"
+        f"Создана: {order_data.get('created_at', 'неизвестно')}\n\n"
+        f"Текст:\n{order_data.get('text') or 'не указан'}"
+    )
+
+
+def render_order_result(order_id: str, order_data: dict[str, Any] | None, user_label: str) -> str:
+    if not order_data:
+        return "❌ Заявка не найдена."
+    title = "✅ ЗАЯВКА ОДОБРЕНА" if order_data.get("status") == "approved" else "❌ ЗАЯВКА ОТКЛОНЕНА"
+    return (
+        f"{title}\n\n"
+        f"№: {order_data.get('order_no', '-')}\n"
+        f"ID: {order_id}\n"
+        f"Пользователь: {user_label}\n"
+        f"Сумма: {order_data.get('price', 0)} ₽\n"
+        f"Срок: {order_data.get('days', 0)} дн.\n"
+        f"Текст: {order_data.get('text') or 'не указан'}"
+    )
+
+
+def render_orders_history_text(orders_data: dict[str, Any], show_all: bool = False) -> str:
+    history_items: list[str] = []
+    for order_id, order_data in sorted(orders_data.items(), key=lambda item: item[1].get("created_at", ""), reverse=True):
+        if not show_all and order_data.get("status") not in {"approved", "rejected"}:
+            continue
+        status = order_data.get("status", "unknown")
+        status_icon = "✅" if status == "approved" else ("❌" if status == "rejected" else "⏳")
+        history_items.append(
+            f"{status_icon} {order_id} | type={order_data.get('type', '-')}"
+            f" | user={order_data.get('user_id')} | {order_data.get('price', 0)} ₽"
+            f" | {status} | {order_data.get('created_at', '-')}"
+        )
+    if not history_items:
+        return "ИСТОРИЯ ЗАКАЗОВ\n\nИстория пока пуста."
+    return "ИСТОРИЯ ЗАКАЗОВ\n\n" + "\n".join(history_items[:80])

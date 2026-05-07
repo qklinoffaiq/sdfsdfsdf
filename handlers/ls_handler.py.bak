@@ -1,0 +1,567 @@
+from __future__ import annotations
+
+import json
+import time
+from datetime import datetime
+from typing import Any
+
+from vk_api.keyboard import VkKeyboard, VkKeyboardColor
+
+from config import RATES, MAIN_TEXT_RATES, SUBSCRIPTION_CHANNEL_LINK, group_id
+from menu import generate_rates_menu, generate_main_text_rates_menu
+from services.order_service import OrderService
+
+
+USER_STATES: dict[str, dict[str, Any]] = {}
+
+WELCOME_TEXT = (
+    "👋 Добро пожаловать!\n"
+    "Здесь вы можете заказать продвижение своего канала или аккаунта.\n\n"
+    "Выберите действие:"
+)
+
+HELP_TEXT = (
+    "🛠 ДОСТУПНЫЕ КОМАНДЫ (ЛС):\n\n"
+    "🔸 .начать — главное меню\n"
+    "🔸 .купить — заказать рассылку\n"
+    "🔸 .продлить — продлить рассылку (чек)\n"
+    "🔸 .сообщение — посмотреть свою рекламу\n"
+    "🔸 .редсообщение [текст] — изменить текст\n"
+    "🔸 .редфото — изменить фото к рассылке\n"
+    "🔸 .помощь — этот список"
+)
+
+INFO_TEXT = (
+    "🏢 О НАС\n\n"
+    "Мы занимаемся продвижением каналов и аккаунтов.\n"
+    "📊 Рассылаем сообщения в 150+ чатов\n"
+    "💰 Доступные тарифы от 300 ₽\n"
+    "⚡️ Быстрое одобрение заявок\n\n"
+    "По вопросам связи: @admin"
+)
+
+
+def _main_menu(has_active_ad: bool) -> str:
+    kb = VkKeyboard(inline=True)
+    if has_active_ad:
+        kb.add_button("📨 Моё сообщение", color=VkKeyboardColor.PRIMARY, payload={"command": ".сообщение"})
+        kb.add_button("🔁 Продлить рассылку", color=VkKeyboardColor.POSITIVE, payload={"command": ".продлить"})
+        kb.add_line()
+        kb.add_button("✏️ Редактировать текст", color=VkKeyboardColor.SECONDARY, payload={"command": ".редсообщение"})
+        kb.add_button("🖼️ Редактировать фото", color=VkKeyboardColor.SECONDARY, payload={"command": ".редфото"})
+    else:
+        kb.add_button("📢 Купить рекламу", color=VkKeyboardColor.POSITIVE, payload={"command": ".купить"})
+        kb.add_button("❓ Помощь", color=VkKeyboardColor.SECONDARY, payload={"command": ".помощь"})
+        kb.add_button("ℹ️ Информация о нас", color=VkKeyboardColor.SECONDARY, payload={"command": ".инфо_о_нас"})
+    return kb.get_keyboard()
+
+
+def _check_subscription(vk, user_id: int, logger=None):
+    """Проверить подписку пользователя на сообщество"""
+    try:
+        member = vk.groups.getMembers(group_id=group_id, user_id=user_id)
+        if member.get('count', 0) > 0:
+            return True
+        return False
+    except Exception as e:
+        if logger:
+            logger.error(f"Ошибка проверки подписки: {e}")
+        return False
+
+
+def _kb_cancel() -> str:
+    kb = VkKeyboard(inline=True)
+    kb.add_button("❌ Отмена", color=VkKeyboardColor.NEGATIVE, payload={"command": "cancel"})
+    return kb.get_keyboard()
+
+
+def _kb_text_confirm() -> str:
+    kb = VkKeyboard(inline=True)
+    kb.add_button("✏️ Изменить", color=VkKeyboardColor.SECONDARY, payload={"command": "edit_text"})
+    kb.add_line()
+    kb.add_button("➡️ Продолжить", color=VkKeyboardColor.POSITIVE, payload={"command": "continue_after_text"})
+    kb.add_button("❌ Отмена", color=VkKeyboardColor.NEGATIVE, payload={"command": "cancel"})
+    return kb.get_keyboard()
+
+
+def _kb_media_choice() -> str:
+    kb = VkKeyboard(inline=True)
+    kb.add_button("✅ Да", color=VkKeyboardColor.POSITIVE, payload={"command": "add_media_yes"})
+    kb.add_button("➡️ Пропустить", color=VkKeyboardColor.PRIMARY, payload={"command": "skip_media"})
+    kb.add_line()
+    kb.add_button("❌ Выйти", color=VkKeyboardColor.NEGATIVE, payload={"command": "cancel"})
+    return kb.get_keyboard()
+
+
+def _kb_media_preview() -> str:
+    kb = VkKeyboard(inline=True)
+    kb.add_button("✏️ Изменить", color=VkKeyboardColor.SECONDARY, payload={"command": "edit_text"})
+    kb.add_line()
+    kb.add_button("➕ Добавить фото", color=VkKeyboardColor.PRIMARY, payload={"command": "add_more_media"})
+    kb.add_line()
+    kb.add_button("➡️ Продолжить", color=VkKeyboardColor.POSITIVE, payload={"command": "continue_to_payment"})
+    kb.add_button("❌ Выйти", color=VkKeyboardColor.NEGATIVE, payload={"command": "cancel"})
+    return kb.get_keyboard()
+
+
+def _kb_payment() -> str:
+    kb = VkKeyboard(inline=True)
+    kb.add_button("📎 Добавить чек", color=VkKeyboardColor.POSITIVE, payload={"command": "add_check"})
+    kb.add_line()
+    kb.add_button("❌ Отмена", color=VkKeyboardColor.NEGATIVE, payload={"command": "cancel"})
+    return kb.get_keyboard()
+
+
+def _kb_check_confirm() -> str:
+    kb = VkKeyboard(inline=True)
+    kb.add_button("✅ Да, отправить", color=VkKeyboardColor.POSITIVE, payload={"command": "submit_order"})
+    kb.add_line()
+    kb.add_button("❌ Нет, изменить", color=VkKeyboardColor.NEGATIVE, payload={"command": "reupload_check"})
+    return kb.get_keyboard()
+
+
+def _kb_photo_edit_confirm() -> str:
+    kb = VkKeyboard(inline=True)
+    kb.add_button("✅ Да, отправить", color=VkKeyboardColor.POSITIVE, payload={"command": "submit_photo_update"})
+    kb.add_line()
+    kb.add_button("❌ Нет, изменить", color=VkKeyboardColor.NEGATIVE, payload={"command": "retry_photo_update"})
+    return kb.get_keyboard()
+
+
+def _send(vk, user_id: int, text: str, service: OrderService, *, keyboard: str | None = None, attachment: str | None = None, logger=None):
+    params = {"user_id": user_id, "message": text if text else " ", "random_id": service.random_id()}
+    if keyboard:
+        params["keyboard"] = keyboard
+    if attachment:
+        params["attachment"] = attachment
+    try:
+        return vk.messages.send(**params)
+    except Exception as exc:
+        if logger:
+            logger.error(f"Ошибка отправки ЛС пользователю {user_id}: {exc}")
+        return None
+
+
+def _parse_payload(message: dict[str, Any]) -> dict[str, Any]:
+    payload = message.get("payload")
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, str) and payload.strip():
+        try:
+            return json.loads(payload)
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _extract_attachment(message: dict[str, Any]) -> dict[str, Any] | None:
+    atts = message.get("attachments") or []
+    if not atts:
+        return None
+    raw = atts[0]
+    kind = raw.get("type")
+    if kind == "photo":
+        photo = raw["photo"]
+        ref = f"photo{photo['owner_id']}_{photo['id']}"
+        if photo.get("access_key"):
+            ref = f"{ref}_{photo['access_key']}"
+        return {"type": "photo", "vk_attachment": ref, "payload": raw}
+    if kind == "video":
+        video = raw["video"]
+        ref = f"video{video['owner_id']}_{video['id']}"
+        if video.get("access_key"):
+            ref = f"{ref}_{video['access_key']}"
+        return {"type": "video", "vk_attachment": ref, "payload": raw}
+    if kind == "doc":
+        doc = raw["doc"]
+        ref = f"doc{doc['owner_id']}_{doc['id']}"
+        if doc.get("access_key"):
+            ref = f"{ref}_{doc['access_key']}"
+        return {"type": "doc", "vk_attachment": ref, "payload": raw}
+    return None
+
+
+def _notify_admin(vk, message_config: dict[str, Any], service: OrderService, *, extension_only=False, logger=None):
+    admin_chat = message_config.get("admin_chat")
+    if not admin_chat:
+        return
+    text = (
+        "📥 НОВАЯ ЗАЯВКА НА ПРОДЛЕНИЕ\nИспользуйте .продрассылка для просмотра"
+        if extension_only
+        else "📥 НОВАЯ ЗАЯВКА НА РАССЫЛКУ\nИспользуйте .заказы для просмотра"
+    )
+    try:
+        vk.messages.send(peer_id=admin_chat, message=text, random_id=service.random_id())
+    except Exception as exc:
+        if logger:
+            logger.error(f"Ошибка отправки уведомления в админ-чат: {exc}")
+
+
+def _rate_days_from_text(text: str) -> int | None:
+    for days, data in RATES.items():
+        if text == data.get("name"):
+            return int(days)
+    return {
+        "1 день — 25 ₽": 1,
+        "3 дня — 70 ₽": 3,
+        "1 неделя — 150 ₽": 7,
+        "месяц — 450 ₽": 30,
+    }.get(text)
+
+
+def _preview_text(flow: dict[str, Any]) -> str:
+    media_state = f"[Прикреплено: {flow.get('media_type')}]" if flow.get("media_type") else "🖼️ Фото: не прикреплено"
+    return (
+        "📄 Вот ваше сообщение:\n\n"
+        f"{flow.get('text', '')}\n\n"
+        f"{media_state}\n"
+        f"⏳ Срок: {flow.get('rate_name')}\n"
+        f"💰 Цена: {flow.get('price')} ₽"
+    )
+
+
+def _next_order_id(orders_data: dict[str, Any]) -> str:
+    order_id = f"order_{int(time.time())}"
+    while order_id in orders_data:
+        order_id = f"order_{int(time.time() * 1000)}"
+    return order_id
+
+
+def _next_order_no(service: OrderService, orders_data: dict[str, Any]) -> int:
+    return service.next_order_number(orders_data)
+
+
+def _parse_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _wait_time(created_at: str | None) -> str:
+    dt = _parse_dt(created_at)
+    if not dt:
+        return "неизвестно"
+    sec = max(0, int((datetime.now() - dt).total_seconds()))
+    h = sec // 3600
+    m = (sec % 3600) // 60
+    return f"{h} ч {m} мин" if h else f"{m} мин"
+
+
+def _latest_user_order(orders_data: dict[str, Any], user_id: int) -> dict[str, Any] | None:
+    matched = [o for o in orders_data.values() if o.get("user_id") == user_id]
+    if not matched:
+        return None
+    matched.sort(key=lambda x: x.get("created_at", ""))
+    return matched[-1]
+
+
+def _reset_state(state: dict[str, Any]):
+    state.pop("flow", None)
+    state.pop("editing_photo", None)
+    state.pop("edit_photo_attachment", None)
+
+
+def handle_personal_message(
+    vk,
+    event,
+    user_id: int,
+    ads_data: dict[str, Any],
+    orders_data: dict[str, Any],
+    message_config: dict[str, Any],
+    service: OrderService,
+    save_ads,
+    save_orders,
+    logger=None,
+):
+    message = event.obj.message
+    text = (message.get("text") or "").strip()
+    payload = _parse_payload(message)
+    command = (payload.get("command") or text).strip().lower()
+    state = USER_STATES.setdefault(str(user_id), {"menu_sent": False})
+    active_ad = service.get_user_active_ad(ads_data, user_id)
+
+    if not state.get("menu_sent"):
+        _send(vk, user_id, WELCOME_TEXT, service, keyboard=_main_menu(bool(active_ad)), logger=logger)
+        state["menu_sent"] = True
+        return
+
+    if command in {"cancel", "❌ отмена", "❌ выйти", "выйти"}:
+        _reset_state(state)
+        _send(vk, user_id, "❌ Действие отменено.", service, keyboard=_main_menu(bool(service.get_user_active_ad(ads_data, user_id))), logger=logger)
+        return
+
+    flow = state.get("flow")
+    attachment = _extract_attachment(message)
+
+    if flow:
+        step = flow.get("step")
+        if step == "wait_text" and text and not text.startswith("."):
+            flow["text"] = text
+            flow["step"] = "confirm_text"
+            _send(vk, user_id, _preview_text(flow), service, keyboard=_kb_text_confirm(), logger=logger)
+            return
+        if step == "wait_media" and attachment and attachment["type"] in {"photo", "video"}:
+            flow["photo"] = attachment["vk_attachment"]
+            flow["media_type"] = "фото" if attachment["type"] == "photo" else "видео"
+            flow["step"] = "preview_media"
+            _send(
+                vk,
+                user_id,
+                f"📎 Так будет выглядеть рассылка:\n\n{flow.get('text', '')}\n[Прикреплено: {flow['media_type']}]",
+                service,
+                keyboard=_kb_media_preview(),
+                attachment=flow["photo"],
+                logger=logger,
+            )
+            return
+        if step == "wait_check" and attachment and attachment["type"] in {"photo", "doc"}:
+            flow["attachment"] = attachment
+            flow["step"] = "confirm_check"
+            _send(vk, user_id, "✅ Чек получен!\n\nВсё верно? Проверьте данные перед отправкой на модерацию.", service, keyboard=_kb_check_confirm(), logger=logger)
+            return
+
+    if state.get("editing_photo"):
+        if attachment and attachment["type"] in {"photo", "video"}:
+            state["edit_photo_attachment"] = attachment
+            _send(vk, user_id, "✅ Медиа получено. Отправить изменение на модерацию?", service, keyboard=_kb_photo_edit_confirm(), attachment=attachment["vk_attachment"], logger=logger)
+            return
+        if command in {"retry_photo_update", "❌ нет, изменить"}:
+            _send(vk, user_id, "📎 Пришлите новое фото или видео", service, keyboard=_kb_cancel(), logger=logger)
+            return
+        if command in {"submit_photo_update", "✅ да, отправить"}:
+            media = state.get("edit_photo_attachment")
+            active = service.get_user_active_ad(ads_data, user_id)
+            if not media or not active:
+                _send(vk, user_id, "❌ Не удалось создать заявку.", service, keyboard=_main_menu(bool(active)), logger=logger)
+                _reset_state(state)
+                return
+            active["paused"] = True
+            active["status"] = "paused"
+            save_ads()
+            order_id = _next_order_id(orders_data)
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            orders_data[order_id] = {
+                "order_no": _next_order_no(service, orders_data),
+                "type": "update_ad",
+                "status": "pending",
+                "user_id": user_id,
+                "text": active.get("text", ""),
+                "photo": media["vk_attachment"],
+                "price": active.get("price", 0),
+                "days": active.get("days", 0),
+                "rate_name": active.get("rate_name"),
+                "created_at": now,
+                "photo_attachment": media["payload"],
+                "events": [{"at": now, "event": "created"}],
+            }
+            save_orders()
+            _notify_admin(vk, message_config, service, logger=logger)
+            _send(vk, user_id, "📨 Изменение фото отправлено на модерацию.", service, keyboard=_main_menu(True), logger=logger)
+            _reset_state(state)
+            return
+
+    # Проверка подписки на сообщество для команд в ЛС
+    if command not in {"начать", ".начать", "помощь", ".помощь", "инфо_о_нас", ".инфо_о_нас", "купить", ".купить"}:
+        if not _check_subscription(vk, user_id, logger):
+            _send(vk, user_id,
+                  f"⚠️ Подпишитесь на наше сообщество для использования команд:\n"
+                  f"{SUBSCRIPTION_CHANNEL_LINK}",
+                  service, logger=logger)
+            return
+
+    if command in {"начать", ".начать"}:
+        _reset_state(state)
+        _send(vk, user_id, WELCOME_TEXT, service, keyboard=_main_menu(bool(service.get_user_active_ad(ads_data, user_id))), logger=logger)
+        return
+    if command in {"помощь", ".помощь"}:
+        _send(vk, user_id, HELP_TEXT, service, keyboard=_main_menu(bool(service.get_user_active_ad(ads_data, user_id))), logger=logger)
+        return
+    if command in {"инфо_о_нас", ".инфо_о_нас"}:
+        can_buy, reason = service.can_buy_main_text(ads_data)
+        kb = VkKeyboard(inline=True)
+        if can_buy:
+            kb.add_button("💰 Купить рекламу", color=VkKeyboardColor.POSITIVE, payload={"command": "buy_main_text_menu"})
+        kb.add_button("🔙 Назад", color=VkKeyboardColor.SECONDARY, payload={"command": ".начать"})
+        msg = INFO_TEXT
+        if not can_buy:
+            msg += f"\n\n⚠️ Место основного текста занято.\n{reason}"
+        _send(vk, user_id, msg, service, keyboard=kb.get_keyboard(), logger=logger)
+        return
+
+    if command in {"buy_main_text_menu", "buy_main_text"}:
+        can_buy, reason = service.can_buy_main_text(ads_data)
+        if not can_buy:
+            _send(vk, user_id, f"⚠️ {reason}", service, keyboard=_main_menu(False), logger=logger)
+            return
+        state["flow"] = {"step": "choose_main_text_rate"}
+        _send(vk, user_id, "📅 Выберите срок для основного текста:", service, keyboard=generate_main_text_rates_menu(), logger=logger)
+        return
+
+    if command in {"сообщение", ".сообщение"}:
+        active = service.get_user_active_ad(ads_data, user_id)
+        if active:
+            exts = active.get("extensions", []) if isinstance(active.get("extensions"), list) else []
+            msg = (
+                "📨 Ваше сообщение:\n\n"
+                f"{active.get('text', '')}\n\n"
+                f"📌 Статус: ✅ Одобрена\n"
+                f"⏳ До: {active.get('expires_at', 'не указано')}\n"
+                f"🔁 Продлений: {len(exts)}"
+            )
+            _send(vk, user_id, msg, service, keyboard=_main_menu(True), attachment=active.get("photo"), logger=logger)
+            return
+        latest = _latest_user_order(orders_data, user_id)
+        if latest:
+            status_map = {"pending": "⏳ На модерации", "approved": "✅ Одобрена", "rejected": "❌ Отклонена"}
+            msg = (
+                "📨 Ваше сообщение:\n\n"
+                f"{latest.get('text') or 'Текст не указан'}\n\n"
+                f"📌 Статус: {status_map.get(latest.get('status'), latest.get('status', 'неизвестно'))}\n"
+                f"🕒 В ожидании: {_wait_time(latest.get('created_at'))}"
+            )
+            _send(vk, user_id, msg, service, keyboard=_main_menu(False), attachment=latest.get("photo"), logger=logger)
+            return
+        _send(vk, user_id, "📭 У вас пока нет активной рекламы.", service, keyboard=_main_menu(False), logger=logger)
+        return
+
+    if command in {"купить", ".купить"}:
+        state["flow"] = {"step": "choose_rate"}
+        _send(vk, user_id, "📅 Выберите срок рассылки:", service, keyboard=generate_rates_menu(), logger=logger)
+        return
+
+    if command in {"продлить", ".продлить"}:
+        active = service.get_user_active_ad(ads_data, user_id)
+        if not active:
+            _send(vk, user_id, "❌ У вас нет активной рекламы для продления.", service, keyboard=_main_menu(False), logger=logger)
+            return
+        state["flow"] = {
+            "step": "wait_check",
+            "mode": "extend",
+            "text": active.get("text", ""),
+            "photo": active.get("photo"),
+            "days": active.get("days", 0),
+            "price": active.get("price", 0),
+            "rate_name": active.get("rate_name"),
+        }
+        _send(vk, user_id, "📎 Отправьте чек об оплате продления рассылки.", service, keyboard=_kb_cancel(), logger=logger)
+        return
+
+    selected_days = _rate_days_from_text(text)
+    if flow and flow.get("step") == "choose_rate" and selected_days:
+        rate = RATES[selected_days]
+        flow.update({"step": "wait_text", "days": selected_days, "price": rate["price"], "rate_name": rate["name"], "text": "", "photo": None, "media_type": None})
+        _send(vk, user_id, "✍️ Пришлите текст для рассылки", service, keyboard=_kb_cancel(), logger=logger)
+        return
+
+    if flow and flow.get("step") == "confirm_text":
+        if command in {"edit_text", "✏️ изменить"}:
+            flow["step"] = "wait_text"
+            _send(vk, user_id, "✍️ Пришлите текст для рассылки", service, keyboard=_kb_cancel(), logger=logger)
+            return
+        if command in {"continue_after_text", "➡️ продолжить"}:
+            flow["step"] = "choose_media"
+            _send(vk, user_id, "🖼️ Хотите добавить медиа (фото/видео)?", service, keyboard=_kb_media_choice(), logger=logger)
+            return
+
+    if flow and flow.get("step") in {"choose_media", "preview_media"}:
+        if command in {"add_media_yes", "add_more_media", "✅ да", "➕ добавить фото"}:
+            flow["step"] = "wait_media"
+            _send(vk, user_id, "📎 Пришлите фото или видео", service, keyboard=_kb_cancel(), logger=logger)
+            return
+        if command in {"skip_media", "continue_to_payment", "➡️ пропустить", "➡️ продолжить"}:
+            flow["step"] = "payment"
+            _send(
+                vk,
+                user_id,
+                f"💳 Для оплаты переведите {flow['price']} ₽ и добавьте чек.",
+                service,
+                keyboard=_kb_payment(),
+                logger=logger,
+            )
+            return
+        if command in {"edit_text", "✏️ изменить"}:
+            flow["step"] = "wait_text"
+            _send(vk, user_id, "✍️ Пришлите текст для рассылки", service, keyboard=_kb_cancel(), logger=logger)
+            return
+
+    if flow and flow.get("step") == "payment":
+        if command in {"add_check", "📎 добавить чек"}:
+            flow["step"] = "wait_check"
+            _send(vk, user_id, "📎 Отправьте скриншот чека или файл.", service, keyboard=_kb_cancel(), logger=logger)
+            return
+
+    if flow and flow.get("step") == "confirm_check":
+        if command in {"reupload_check", "❌ нет, изменить"}:
+            flow["step"] = "wait_check"
+            _send(vk, user_id, "📎 Отправьте новый чек.", service, keyboard=_kb_cancel(), logger=logger)
+            return
+        if command in {"submit_order", "✅ да, отправить"}:
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            order_id = _next_order_id(orders_data)
+            order_type = "extend_ad" if flow.get("mode") == "extend" else "new_ad"
+            orders_data[order_id] = {
+                "order_no": _next_order_no(service, orders_data),
+                "type": order_type,
+                "status": "pending",
+                "user_id": user_id,
+                "text": flow.get("text", ""),
+                "photo": flow.get("photo"),
+                "price": flow.get("price", 0),
+                "days": flow.get("days", 0),
+                "rate_name": flow.get("rate_name"),
+                "created_at": now,
+                "attachment": flow.get("attachment"),
+                "events": [{"at": now, "event": "created"}],
+            }
+            save_orders()
+            _notify_admin(vk, message_config, service, extension_only=(order_type == "extend_ad"), logger=logger)
+            done_text = "📨 Заявка на продление отправлена на модерацию!\nОжидайте подтверждения." if order_type == "extend_ad" else "📨 Ваша заявка отправлена на модерацию!\nОжидайте подтверждения."
+            _send(vk, user_id, done_text, service, keyboard=_main_menu(bool(service.get_user_active_ad(ads_data, user_id))), logger=logger)
+            _reset_state(state)
+            return
+
+    if command.startswith(".редсообщение"):
+        active = service.get_user_active_ad(ads_data, user_id)
+        if not active:
+            _send(vk, user_id, "❌ У вас нет активной рекламы.", service, keyboard=_main_menu(False), logger=logger)
+            return
+        parts = text.split(" ", 1)
+        if len(parts) < 2 or not parts[1].strip():
+            _send(vk, user_id, "✏️ Укажите новый текст: .редсообщение <текст>", service, keyboard=_main_menu(True), logger=logger)
+            return
+        active["paused"] = True
+        active["status"] = "paused"
+        save_ads()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        order_id = _next_order_id(orders_data)
+        orders_data[order_id] = {
+            "order_no": _next_order_no(service, orders_data),
+            "type": "update_ad",
+            "status": "pending",
+            "user_id": user_id,
+            "text": parts[1].strip(),
+            "photo": active.get("photo"),
+            "price": active.get("price", 0),
+            "days": active.get("days", 0),
+            "rate_name": active.get("rate_name"),
+            "created_at": now,
+            "events": [{"at": now, "event": "created"}],
+        }
+        save_orders()
+        _notify_admin(vk, message_config, service, logger=logger)
+        _send(vk, user_id, "📨 Изменение текста отправлено на модерацию.", service, keyboard=_main_menu(True), logger=logger)
+        return
+
+    if command in {"редфото", ".редфото"}:
+        active = service.get_user_active_ad(ads_data, user_id)
+        if not active:
+            _send(vk, user_id, "❌ У вас нет активной рекламы.", service, keyboard=_main_menu(False), logger=logger)
+            return
+        state["editing_photo"] = True
+        _send(vk, user_id, "📎 Пришлите новое фото или видео", service, keyboard=_kb_cancel(), logger=logger)
+        return
+
+    _send(vk, user_id, WELCOME_TEXT, service, keyboard=_main_menu(bool(service.get_user_active_ad(ads_data, user_id))), logger=logger)
